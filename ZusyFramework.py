@@ -13,15 +13,15 @@ def check_powercat():
     try:
         result = subprocess.run(['which', 'powercat'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if result.returncode == 0:
-            print("Powercat zaten yüklü.")
+         print()
         else:
             install = subprocess.run(['sudo', 'apt', 'install', '-y', 'powercat'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             if install.returncode == 0:
-                print("Powercat başarıyla yüklendi.")
+                print("")
             else:
                 print("Error : Package not found. Use Kali Linux")
     except Exception as e:
-        print(f"Bir hata oluştu: {e}")
+        print(f"Error: {e}")
 
 
 
@@ -235,7 +235,6 @@ def menu():
     lhost = local_ip
     lport = "8000"
     
-    print("")
     loading_animation("[*] Starting Zusy Framework")  
     time.sleep(2)  
     print("")  
@@ -391,4 +390,6 @@ def create_trojan():
         
 
 if __name__ == "__main__":
+    check_powercat()    
     menu()
+    
