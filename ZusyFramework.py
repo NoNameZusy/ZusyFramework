@@ -9,6 +9,23 @@ import random
 blod1 = '\033[1m'
 blod2 = '\033[0m'
 
+def check_powercat():
+    try:
+        result = subprocess.run(['which', 'powercat'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if result.returncode == 0:
+            print("Powercat zaten yüklü.")
+        else:
+            install = subprocess.run(['sudo', 'apt', 'install', '-y', 'powercat'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if install.returncode == 0:
+                print("Powercat başarıyla yüklendi.")
+            else:
+                print("Error : Package not found. Use Kali Linux")
+    except Exception as e:
+        print(f"Bir hata oluştu: {e}")
+
+
+
+
 
 
 
