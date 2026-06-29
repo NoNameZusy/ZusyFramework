@@ -1234,18 +1234,22 @@ def _start_bore_tunnel(local_port: int):
         warn(f"Could not launch bore: {e}")
         return None, None
 
-    # Read output for a few seconds until we see "bore.pub:<port>"
+    # Read output until we see the REAL tunnel port. bore logs:
+    #   INFO bore_cli::client: connected to server remote_port=35429
+    #   INFO bore_cli::client: listening at bore.pub:35429
+    # 7835 is bore's internal CONTROL port — never the tunnel; skip it.
     public_addr = None
-    deadline = time.time() + 15
-    pattern  = re.compile(r"bore\.pub:(\d+)")
+    deadline  = time.time() + 15
+    re_remote = re.compile(r"remote_port=(\d+)")
+    re_listen = re.compile(r"listening at bore\.pub:(\d+)")
     while time.time() < deadline:
         line = proc.stdout.readline()
         if not line:
             if proc.poll() is not None:
                 break
             continue
-        m = pattern.search(line)
-        if m:
+        m = re_remote.search(line) or re_listen.search(line)
+        if m and m.group(1) != "7835":
             public_addr = f"bore.pub:{m.group(1)}"
             break
 
@@ -1567,6 +1571,11 @@ def chat_join(host_port: str) -> None:
             port = CHAT_PORT
     except Exception:
         err("Invalid address. Example: [bold cyan]chat join 1.tcp.ngrok.io:12345[/]")
+        return
+
+    if "bore.pub" in host and port == 7835:
+        warn("Port 7835 is bore's internal control port, not a chat room.")
+        info("Ask the host for the real address — it looks like [bold cyan]bore.pub:<random-port>[/].")
         return
 
     info(f"Connecting  →  [bold cyan]{host}:{port}[/] …")
