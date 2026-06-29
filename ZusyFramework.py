@@ -1041,24 +1041,190 @@ def _chat_handle_client(conn: socket.socket, addr: tuple) -> None:
 
 
 # ── Tunnel helper: bore.pub (no account, no card, raw TCP) ───────────────────
+#   If `bore` is missing, this auto-installs it: first by downloading the
+#   prebuilt binary from GitHub releases (no Rust needed), and if that fails,
+#   by `git clone` + `cargo build` from source. Linux / macOS / Windows.
+
+_BORE_REPO = "ekzhang/bore"
+
+
+def _bore_install_dir() -> str:
+    d = os.path.expanduser("~/.zusy/bin")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _find_bore() -> str:
+    """Return a usable bore path: PATH first, then our local install dir."""
+    p = shutil.which("bore")
+    if p:
+        return p
+    exe = "bore.exe" if platform.system().lower().startswith("win") else "bore"
+    local = os.path.join(_bore_install_dir(), exe)
+    if os.path.isfile(local) and os.access(local, os.X_OK):
+        return local
+    return ""
+
+
+def _bore_targets():
+    """(os_keyword, arch_keyword, exe_name) for matching a release asset."""
+    sysname = platform.system().lower()
+    machine = platform.machine().lower()
+    os_key  = "linux"
+    if sysname.startswith("darwin"):
+        os_key = "darwin"
+    elif sysname.startswith("win"):
+        os_key = "windows"
+    arch_key = "x86_64"
+    if machine in ("aarch64", "arm64"):
+        arch_key = "aarch64"
+    elif machine in ("x86_64", "amd64", "x64"):
+        arch_key = "x86_64"
+    exe = "bore.exe" if os_key == "windows" else "bore"
+    return os_key, arch_key, exe
+
+
+def _install_bore_prebuilt() -> str:
+    """Download the matching prebuilt bore binary from GitHub. Returns path or ''."""
+    import tarfile, zipfile, tempfile, stat as _stat
+    os_key, arch_key, exe = _bore_targets()
+
+    info("Looking up the latest bore release …")
+    try:
+        api = f"https://api.github.com/repos/{_BORE_REPO}/releases/latest"
+        req = urllib.request.Request(api, headers={"User-Agent": "zusy"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            data = json.loads(r.read().decode())
+        assets = data.get("assets", [])
+    except Exception as e:
+        warn(f"Could not query GitHub releases: {e}")
+        return ""
+
+    # Pick an asset whose name has both the OS and arch keywords
+    chosen = None
+    for a in assets:
+        name = a.get("name", "").lower()
+        if os_key in name and arch_key in name and name.endswith((".tar.gz", ".zip")):
+            chosen = a
+            break
+    if not chosen:
+        warn(f"No prebuilt bore found for {os_key}/{arch_key}.")
+        return ""
+
+    url = chosen["browser_download_url"]
+    info(f"Downloading [bold cyan]{chosen['name']}[/] …")
+    try:
+        tmpdir = tempfile.mkdtemp(prefix="bore_")
+        archive = os.path.join(tmpdir, chosen["name"])
+        req = urllib.request.Request(url, headers={"User-Agent": "zusy"})
+        with urllib.request.urlopen(req, timeout=60) as r, open(archive, "wb") as f:
+            shutil.copyfileobj(r, f)
+
+        # Extract the bore binary
+        extracted = None
+        if archive.endswith(".tar.gz"):
+            with tarfile.open(archive, "r:gz") as tf:
+                for m in tf.getmembers():
+                    base = os.path.basename(m.name)
+                    if base in ("bore", "bore.exe"):
+                        m.name = base
+                        tf.extract(m, tmpdir)
+                        extracted = os.path.join(tmpdir, base)
+                        break
+        else:  # .zip
+            with zipfile.ZipFile(archive) as zf:
+                for n in zf.namelist():
+                    base = os.path.basename(n)
+                    if base in ("bore", "bore.exe"):
+                        zf.extract(n, tmpdir)
+                        extracted = os.path.join(tmpdir, n)
+                        break
+
+        if not extracted or not os.path.isfile(extracted):
+            warn("Could not find the bore binary inside the archive.")
+            return ""
+
+        dest = os.path.join(_bore_install_dir(), exe)
+        shutil.copyfile(extracted, dest)
+        if os_key != "windows":
+            os.chmod(dest, os.stat(dest).st_mode | _stat.S_IEXEC | _stat.S_IXGRP | _stat.S_IXOTH)
+        ok(f"bore installed  →  [bold green]{dest}[/]")
+        return dest
+    except Exception as e:
+        warn(f"Prebuilt download failed: {e}")
+        return ""
+
+
+def _install_bore_from_source() -> str:
+    """Fallback: git clone + cargo build --release. Needs git + cargo."""
+    import tempfile
+    if shutil.which("git") is None or shutil.which("cargo") is None:
+        warn("Source build needs both `git` and `cargo` (Rust) installed.")
+        return ""
+    info("Building bore from source (git clone + cargo build) …")
+    try:
+        tmpdir = tempfile.mkdtemp(prefix="bore_src_")
+        src = os.path.join(tmpdir, "bore")
+        rc = subprocess.run(
+            ["git", "clone", "--depth", "1", f"https://github.com/{_BORE_REPO}.git", src],
+            capture_output=True, text=True,
+        )
+        if rc.returncode != 0:
+            warn(f"git clone failed: {rc.stderr.strip()[:200]}")
+            return ""
+        rc = subprocess.run(
+            ["cargo", "build", "--release"], cwd=src, capture_output=True, text=True,
+        )
+        if rc.returncode != 0:
+            warn(f"cargo build failed: {rc.stderr.strip()[:200]}")
+            return ""
+        built = os.path.join(src, "target", "release", "bore")
+        if not os.path.isfile(built):
+            warn("Build finished but bore binary not found.")
+            return ""
+        dest = os.path.join(_bore_install_dir(), "bore")
+        shutil.copyfile(built, dest)
+        os.chmod(dest, 0o755)
+        ok(f"bore built and installed  →  [bold green]{dest}[/]")
+        return dest
+    except Exception as e:
+        warn(f"Source build failed: {e}")
+        return ""
+
+
+def _find_or_install_bore() -> str:
+    """Return a path to a working bore, installing it if necessary."""
+    p = _find_bore()
+    if p:
+        return p
+    warn("`bore` is not installed — setting it up automatically …")
+    p = _install_bore_prebuilt()
+    if p:
+        return p
+    info("Trying to build from source instead …")
+    p = _install_bore_from_source()
+    if p:
+        return p
+    err("Automatic bore setup failed. Manual options:")
+    info("  • [bold cyan]cargo install bore-cli[/]   (needs Rust)")
+    info("  • [bold cyan]brew install bore[/]          (macOS)")
+    info("  • prebuilt binary: [bold cyan underline]https://github.com/ekzhang/bore/releases[/]")
+    return ""
+
 
 def _start_bore_tunnel(local_port: int):
     """
-    Launch `bore local <port> --to bore.pub` and parse the assigned public
-    address. Returns (public_addr, proc) on success, else (None, None).
-    Requires the `bore` binary on PATH (cargo install bore-cli / brew install bore
-    / prebuilt binary from https://github.com/ekzhang/bore/releases).
+    Ensure bore is available (auto-install if needed), then launch
+    `bore local <port> --to bore.pub` and parse the assigned public address.
+    Returns (public_addr, proc) on success, else (None, None).
     """
-    if shutil.which("bore") is None:
-        warn("`bore` is not installed. Install it with one of:")
-        info("  • [bold cyan]cargo install bore-cli[/]   (needs Rust)")
-        info("  • [bold cyan]brew install bore[/]          (macOS)")
-        info("  • prebuilt binary: [bold cyan underline]https://github.com/ekzhang/bore/releases[/]")
+    bore = _find_or_install_bore()
+    if not bore:
         return None, None
 
     try:
         proc = subprocess.Popen(
-            ["bore", "local", str(local_port), "--to", "bore.pub"],
+            [bore, "local", str(local_port), "--to", "bore.pub"],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -1070,7 +1236,7 @@ def _start_bore_tunnel(local_port: int):
 
     # Read output for a few seconds until we see "bore.pub:<port>"
     public_addr = None
-    deadline = time.time() + 12
+    deadline = time.time() + 15
     pattern  = re.compile(r"bore\.pub:(\d+)")
     while time.time() < deadline:
         line = proc.stdout.readline()
@@ -1152,7 +1318,7 @@ def chat_create() -> None:
     # ── Choose how to expose the room ─────────────────────────────────────────
     console.print()
     info("How do you want to host the room?")
-    console.print("    [bold bright_green]1[/]) bore.pub        [dim]— public, no account, no card (one small binary)[/]")
+    console.print("    [bold bright_green]1[/]) bore.pub        [dim]— public, no account/card (auto-installs bore for you)[/]")
     console.print("    [bold bright_green]2[/]) ngrok           [dim]— public, needs token + a card on file for TCP[/]")
     console.print("    [bold bright_green]3[/]) LAN only        [dim]— same Wi-Fi / network, no internet[/]")
     console.print("    [bold bright_green]4[/]) Port forwarding [dim]— public, NO install (uses your router)[/]")
